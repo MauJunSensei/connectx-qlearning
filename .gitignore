@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+qtable.lmdb/
+connectx-refactored.ipynb
+connectx-with-q-learning.ipynb
+main_nodb.py
