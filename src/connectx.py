@@ -2,15 +2,13 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-
 import gymnasium as gym
 from kaggle_environments import make
-from src import config as cfg
 
 class ConnectX(gym.Env):
     def __init__(self):
         self.env = make("connectx", debug=True)
-        self.trainer = self.env.train([None, cfg.AGENT])
+        self.trainer = self.env.train([None, 'random'])
 
         # Define required gym fields (examples):
         config = self.env.configuration
