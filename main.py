@@ -2,13 +2,15 @@ import multiprocessing
 import numpy as np
 import matplotlib.pyplot as plt
 from random import choice
-from tqdm import tqdm
 import psutil
 import time
 import src.config as cfg
 from src.qtable import QTable
 from src.connectx import ConnectX
 from kaggle_environments import evaluate
+import tkinter as tk
+from tkinter import ttk
+
 
 def choose_action(state, epsilon, env, q_table):
     if np.random.random() < epsilon:
@@ -18,8 +20,12 @@ def choose_action(state, epsilon, env, q_table):
         valid_actions = [q_values[c] if state.board[c] == 0 else -np.inf for c in range(env.action_space.n)]
         return int(np.argmax(valid_actions))
 
-def run_episode(q_table, epsilon, q_diff_list):
+def run_episode(q_table, epsilon, q_diff_list, episode_num):
     env = ConnectX()
+    if (episode_num // cfg.SWITCH_INTERVAL) % 2 == 0:
+        env.trainer = env.env.train([None, 'random'])
+    else:
+        env.trainer = env.env.train([None, 'negamax'])
     state = env.reset()
 
     done = False
@@ -31,14 +37,9 @@ def run_episode(q_table, epsilon, q_diff_list):
 
         # Apply new rules
         if done:
-            if reward == 1:  # Won
-                reward = 1.0
-            elif reward == 0:  # Lost
-                reward = -1.0
-            else:  # Draw
-                reward = 0.0
+            reward = 1.0 if reward == 1 else -1.0 if reward == 0 else 0.0
         else:
-            reward = -0.01  # Try to prevent the agent from taking a long time to win
+            reward = -0.01  # Discourage long games
 
         total_reward += reward
 
@@ -63,7 +64,7 @@ def worker(q_table, progress_queue, reward_queue, q_diff_queue, q_table_size_que
         with epsilon_shared.get_lock():  # Read the shared epsilon safely
             epsilon = epsilon_shared.value  # Read but do NOT update
         
-        total_reward, q_table_size = run_episode(q_table, epsilon, q_diff_list)
+        total_reward, q_table_size = run_episode(q_table, epsilon, q_diff_list, episode)
         reward_queue.put(total_reward)
         progress_queue.put(1)
         q_diff_queue.put(np.mean(q_diff_list) if q_diff_list else 0)
@@ -93,6 +94,9 @@ if __name__ == "__main__":
     last_time = start_time
 
     epsilon_shared = multiprocessing.Value('d', cfg.EPSILON)
+    
+    eval_random_data = []
+    eval_negamax_data = []
 
     for i in range(multiprocessing.cpu_count()):
         thread = multiprocessing.Process(
@@ -105,43 +109,100 @@ if __name__ == "__main__":
 
     total_rewards = []
     
-    with tqdm(total=cfg.NUM_EPISODES, desc="Training Progress") as pbar:
-        for i in range(cfg.NUM_EPISODES):
-            progress_queue.get()
-            reward = reward_queue.get()
-            q_diff = q_diff_queue.get()
-            q_table_size = q_table_size_queue.get()
-            total_rewards.append(reward)
-            q_diff_data.append(q_diff)
-            q_table_size_data.append(q_table_size)
-            pbar.update(1)
+    # Create the GUI window and progress bar widgets
+    root = tk.Tk()
+    root.title("Training Progress")
 
-            # Update epsilon safely in the main process
-            with epsilon_shared.get_lock():
-                epsilon_shared.value = cfg.MIN_EPSILON + (cfg.EPSILON - cfg.MIN_EPSILON) / np.sqrt(i + 1)
-                epsilon_data.append(epsilon_shared.value)
+    progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate", maximum=cfg.NUM_EPISODES)
+    progress_bar.pack(pady=20)
 
-            # Collect runtime, memory usage
-            current_time = time.time()
-            elapsed_time = current_time - last_time
-            last_time = current_time
-            memory_info = process.memory_info()
-            runtime_data.append(elapsed_time)
-            memory_data.append(memory_info.rss / (1024 * 1024))  # Convert to MB
+    desc_label = tk.Label(root, text="Training Progress")
+    desc_label.pack(pady=10)
 
-    for thread in threads:
-        thread.join()
+    percentage_label = tk.Label(root, text="0%")
+    percentage_label.pack(pady=10)
 
-    end_time = time.time()
-    elapsed_time = end_time - start_time
+    trainer_label = tk.Label(root, text="Current Trainer: Random")
+    trainer_label.pack(pady=10)
 
-    print(f"Elapsed Time: {elapsed_time:.2f} seconds")
+    # Main training loop
+    for i in range(cfg.NUM_EPISODES):
+        # Get data from your queues
+        progress_queue.get()
+        reward = reward_queue.get()
+        q_diff = q_diff_queue.get()
+        q_table_size = q_table_size_queue.get()
+        total_rewards.append(reward)
+        q_diff_data.append(q_diff)
+        q_table_size_data.append(q_table_size)
+        
+        # Update the progress bar value
+        progress_bar['value'] = i + 1
+        
+        # Update percentage label
+        percentage = (i + 1) / cfg.NUM_EPISODES * 100
+        percentage_label.config(text=f"{percentage:.2f}%")
+        
+        # Update trainer label
+        current_trainer = "Random" if (i // cfg.SWITCH_INTERVAL) % 2 == 0 else "Negamax"
+        trainer_label.config(text=f"Current Trainer: {current_trainer}")
+        
+        # Update epsilon safely in the main process
+        with epsilon_shared.get_lock():
+            epsilon_shared.value = cfg.MIN_EPSILON + (cfg.EPSILON - cfg.MIN_EPSILON) / np.sqrt(i + 1)
+            epsilon_data.append(epsilon_shared.value)
+        
+        # Collect runtime and memory usage
+        current_time = time.time()
+        elapsed_time = current_time - last_time
+        last_time = current_time
+        memory_info = process.memory_info()
+        runtime_data.append(elapsed_time)
+        memory_data.append(memory_info.rss / (1024 * 1024))  # MB
+        
+        root.update_idletasks()
+        root.update()
+        
+        # Evaluate the agent every SWITCH_INTERVAL steps
+        # if (i + 1) % cfg.SWITCH_INTERVAL == 0:
+        #     dict_q_table = {k: int(np.argmax(v)) for k, v in q_table.get_table().items() if np.count_nonzero(v) > 0}
+            
+        #     def my_agent(obs, conf):
+        #         state_key = hex(int(''.join(map(str, obs.board + [obs.mark])), 3))[2:]
+        #         return dict_q_table.get(state_key, choice([c for c in range(conf.columns) if obs.board[c] == 0]))
 
-    # Plot data
+        #     random_results = evaluate("connectx", [my_agent, "random"], num_episodes=cfg.EVAL_EP_COUNT)
+        #     negamax_results = evaluate("connectx", [my_agent, "negamax"], num_episodes=cfg.EVAL_EP_COUNT)
+            
+        #     print("My Agent vs Random Agent:", np.mean([r[0] for r in random_results]))
+        #     print("My Agent vs Negamax Agent:", np.mean([r[0] for r in negamax_results]))
+                
+    # Destroy the GUI window when training is done.
+    root.destroy()
+
+    # Evaluate the agent against random and negamax agents
+    dict_q_table = {k: int(np.argmax(v)) for k, v in q_table.get_table().items() if np.count_nonzero(v) > 0}
+
+    def my_agent(obs, conf):
+        state_key = hex(int(''.join(map(str, obs.board + [obs.mark])), 3))[2:]
+        return dict_q_table.get(state_key, choice([c for c in range(conf.columns) if obs.board[c] == 0]))
+
+    print("Evaluating agent...")
+    random_results = evaluate("connectx", [my_agent, "random"], num_episodes=cfg.EVAL_EP_COUNT)
+    negamax_results = evaluate("connectx", [my_agent, "negamax"], num_episodes=cfg.EVAL_EP_COUNT)
+    
+    print("My Agent vs Random Agent:", np.mean([r[0] for r in random_results]))
+    print("My Agent vs Negamax Agent:", np.mean([r[0] for r in negamax_results]))
+    print("Q-table size:", q_table.get_size())
+
+    # Plot the training data
     def remove_outliers(data, m=2):
-        mean, std = np.mean(data), np.std(data)
-        return [x for x in data if mean - m * std < x < mean + m * std]
-
+        data = np.array(data)
+        mean = np.mean(data)
+        std_dev = np.std(data)
+        filtered_data = data[abs(data - mean) < m * std_dev]
+        return filtered_data
+    
     def plot_data(ax, data, xlabel, ylabel, title, window_size=cfg.WINDOW_SIZE):
         print(f"Plotting {title}...")
         if window_size:
@@ -166,49 +227,4 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    tmp_dict_q_table = q_table.get_table()
-    dict_q_table = dict()
-
-    for k in tmp_dict_q_table:
-        if np.count_nonzero(tmp_dict_q_table[k]) > 0:
-            dict_q_table[k] = int(np.argmax(tmp_dict_q_table[k]))
-
-    my_agent = (
-        """def my_agent(observation, configuration):
-        from random import choice
-
-        q_table = """
-        + str(dict_q_table).replace(" ", "")
-        + """
-
-        board = observation.board[:]
-        board.append(observation.mark)
-        state_key = list(map(str, board))
-        state_key = hex(int(''.join(state_key), 3))[2:]
-
-        if state_key not in q_table.keys():
-            return choice([c for c in range(configuration.columns) if observation.board[c] == 0])
-
-        action = q_table[state_key]
-
-        if observation.board[action] != 0:
-            return choice([c for c in range(configuration.columns) if observation.board[c] == 0])
-
-        return action
-        """
-    )
-
-    with open("submission.py", "w") as f:
-        f.write(my_agent)
-
-
-    def mean_reward(rewards):
-        return sum(r[0] for r in rewards) / sum(r[0] + r[1] for r in rewards)
-
-
-    from submission import my_agent
-    
-    print('Q-Table size: ', q_table.get_size())
-    # Run multiple episodes
-    print("My Agent vs Random Agent:", mean_reward(evaluate("connectx", [my_agent, "random"], num_episodes=500)))
-    print("My Agent vs Negamax Agent:", mean_reward(evaluate("connectx", [my_agent, "negamax"], num_episodes=500)))
+                
