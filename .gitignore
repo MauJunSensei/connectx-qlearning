@@ -172,10 +172,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
 qtable.lmdb/
 connectx-refactored.ipynb
 connectx-with-q-learning.ipynb
 main_nodb.py
 submission.py
-connectx_getting_started (5).ipynb
+qtable.lmdb/data.mdb
+qtable.lmdb/lock.mdb
+ppo_tensorboard/
+

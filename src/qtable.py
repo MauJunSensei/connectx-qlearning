@@ -76,13 +76,4 @@ class QTable:
         with self.lock:
             with self.env.begin(db=self.db) as txn:
                 return txn.stat()['entries']
-            
-    def prune(self, threshold):
-        with self.lock:
-            with self.env.begin(db=self.db, write=True) as txn:
-                cursor = txn.cursor()
-                for key, value in cursor:
-                    arr = pickle.loads(value)
-                    if np.max(arr) < threshold:
-                        txn.delete(key)
                         
